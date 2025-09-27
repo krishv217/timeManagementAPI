@@ -131,11 +131,19 @@ class ScheduleOptimizer:
             else:
                 date = current_time
             
+            # Calculate minimum start time (current time + 15 minutes)
+            min_start_time = current_time + timedelta(minutes=15)
+            
             system_prompt = f"""
 You are an intelligent scheduling assistant. Given a user's natural language request 
 and their existing calendar, create an optimized daily schedule.
 
-IMPORTANT: Current time is {current_time.strftime('%Y-%m-%d %H:%M:%S')} - DO NOT schedule any tasks for times in the past!
+🚨 CRITICAL TIME CONSTRAINT 🚨
+Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}
+MINIMUM start time for ANY task: {min_start_time.strftime('%Y-%m-%d %H:%M:%S')}
+
+ABSOLUTE RULE: ALL task start times MUST be AFTER {min_start_time.strftime('%Y-%m-%d %H:%M:%S')}
+If you schedule any task before this time, it will be automatically rejected.
 
 User Preferences:
 - Work hours: {preferences.get('work_hours', {})}
@@ -158,7 +166,7 @@ Consider:
 - Existing calendar commitments
 - Avoid scheduling conflicts
 - Do not miss any tasks
-- CRITICAL: Only schedule tasks for times AFTER {current_time.strftime('%Y-%m-%d %H:%M:%S')}
+- MANDATORY: All start times must be >= {min_start_time.strftime('%Y-%m-%d %H:%M:%S')}
 
 Respond with a JSON object containing:
 {{
@@ -166,8 +174,8 @@ Respond with a JSON object containing:
     {{
       "title": "task title",
       "description": "task description",
-      "start_time": "2024-01-01T09:00:00",
-      "end_time": "2024-01-01T10:00:00",
+      "start_time": "{min_start_time.strftime('%Y-%m-%dT%H:%M:%S')}",
+      "end_time": "{min_start_time.strftime('%Y-%m-%dT%H:%M:%S')}",
       "priority": 3,
       "category": "work",
       "reasoning": "why this time slot was chosen"
@@ -181,6 +189,7 @@ Respond with a JSON object containing:
 User request: "{user_input}"
 Date: {date.strftime('%Y-%m-%d')}
 Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}
+Minimum start time: {min_start_time.strftime('%Y-%m-%d %H:%M:%S')}
 """
 
             print(f"🤖 Calling OpenAI API for schedule generation...")
@@ -224,20 +233,27 @@ Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}
                     print(f"   Start in past? {start_time <= current_time}")
                     print(f"   End in past? {end_time <= current_time}")
                     
-                    # Validate and adjust times to ensure they're in the future
-                    if start_time <= current_time:
-                        # If start time is in the past, adjust it to current time + 15 minutes
+                    # FORCE all times to be in the future - no exceptions
+                    min_start_time = current_time + timedelta(minutes=15)
+                    
+                    if start_time < min_start_time:
+                        # Force start time to be at least 15 minutes from now
                         original_start = start_time
-                        start_time = current_time + timedelta(minutes=15)
-                        # Adjust end time accordingly
+                        start_time = min_start_time
+                        # Adjust end time to maintain duration
                         duration = end_time - original_start
                         end_time = start_time + duration
-                        print(f"⚠️ ADJUSTED past time for task '{task_data['title']}' from {original_start} to {start_time}")
+                        print(f"🚨 FORCED past time for task '{task_data['title']}' from {original_start} to {start_time}")
                     
                     if end_time <= start_time:
                         # Ensure end time is after start time
                         end_time = start_time + timedelta(minutes=60)  # Default 1 hour duration
-                        print(f"⚠️ ADJUSTED end time for task '{task_data['title']}' to {end_time}")
+                        print(f"🚨 FORCED end time for task '{task_data['title']}' to {end_time}")
+                    
+                    # Double-check: if end time is still in the past, force it to future
+                    if end_time < min_start_time:
+                        end_time = start_time + timedelta(minutes=60)
+                        print(f"🚨 FORCED end time to future for task '{task_data['title']}' to {end_time}")
                     
                     print(f"   Final start: {start_time}")
                     print(f"   Final end: {end_time}")
