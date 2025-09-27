@@ -63,9 +63,12 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+-- Drop triggers if they exist, then recreate them
+DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks;
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
@@ -75,16 +78,20 @@ ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_patterns ENABLE ROW LEVEL SECURITY;
 
 -- Users can only see and modify their own data
+DROP POLICY IF EXISTS "Users can view own profile" ON users;
 CREATE POLICY "Users can view own profile" ON users
     FOR SELECT USING (auth.uid()::text = google_id);
 
+DROP POLICY IF EXISTS "Users can update own profile" ON users;
 CREATE POLICY "Users can update own profile" ON users
     FOR UPDATE USING (auth.uid()::text = google_id);
 
+DROP POLICY IF EXISTS "Users can insert own profile" ON users;
 CREATE POLICY "Users can insert own profile" ON users
     FOR INSERT WITH CHECK (auth.uid()::text = google_id);
 
 -- Tasks policies
+DROP POLICY IF EXISTS "Users can view own tasks" ON tasks;
 CREATE POLICY "Users can view own tasks" ON tasks
     FOR SELECT USING (
         user_id IN (
@@ -92,6 +99,7 @@ CREATE POLICY "Users can view own tasks" ON tasks
         )
     );
 
+DROP POLICY IF EXISTS "Users can insert own tasks" ON tasks;
 CREATE POLICY "Users can insert own tasks" ON tasks
     FOR INSERT WITH CHECK (
         user_id IN (
@@ -99,6 +107,7 @@ CREATE POLICY "Users can insert own tasks" ON tasks
         )
     );
 
+DROP POLICY IF EXISTS "Users can update own tasks" ON tasks;
 CREATE POLICY "Users can update own tasks" ON tasks
     FOR UPDATE USING (
         user_id IN (
@@ -106,6 +115,7 @@ CREATE POLICY "Users can update own tasks" ON tasks
         )
     );
 
+DROP POLICY IF EXISTS "Users can delete own tasks" ON tasks;
 CREATE POLICY "Users can delete own tasks" ON tasks
     FOR DELETE USING (
         user_id IN (
@@ -114,6 +124,7 @@ CREATE POLICY "Users can delete own tasks" ON tasks
     );
 
 -- User patterns policies
+DROP POLICY IF EXISTS "Users can view own patterns" ON user_patterns;
 CREATE POLICY "Users can view own patterns" ON user_patterns
     FOR SELECT USING (
         user_id IN (
@@ -121,6 +132,7 @@ CREATE POLICY "Users can view own patterns" ON user_patterns
         )
     );
 
+DROP POLICY IF EXISTS "Users can insert own patterns" ON user_patterns;
 CREATE POLICY "Users can insert own patterns" ON user_patterns
     FOR INSERT WITH CHECK (
         user_id IN (
