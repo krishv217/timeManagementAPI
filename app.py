@@ -1,0 +1,1355 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from openai import OpenAI
+import json
+import re
+from datetime import datetime, timedelta
+import os
+from dotenv import load_dotenv
+from database import db
+from models import (
+    ScheduledTask, TaskPlanningRequest, TaskPlanningResponse, 
+    OptimizationRequest, OptimizationResponse, TaskPriority, TaskCategory, 
+    User, Task, UserPattern, TaskStats, ProductivityInsight
+)
+
+# Load environment variables
+load_dotenv()
+
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
+
+# Initialize OpenAI client with environment variable (lazy initialization)
+client = None
+
+def get_openai_client():
+    """Get OpenAI client with lazy initialization"""
+    global client
+    if client is None:
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is required")
+        client = OpenAI(api_key=api_key)
+    return client
+
+# Global storage for persistent task list
+persistent_tasks = []
+
+class ScheduleOptimizer:
+    """Advanced scheduling optimizer with AI integration"""
+    
+    def __init__(self):
+        self.db = db
+    
+    def get_user_preferences(self, user_id: str = None) -> dict:
+        """Get user preferences for scheduling"""
+        default_preferences = {
+            "work_hours": {"start": "09:00", "end": "17:00"},
+            "focus_times": ["09:00-11:00", "14:00-16:00"],
+            "buffer_time": 15,
+            "max_daily_tasks": 8,
+            "preferred_task_duration": 60
+        }
+        
+        if user_id:
+            user_prefs = self.db.get_user_preferences(user_id)
+            if user_prefs and user_prefs.get('preferences'):
+                merged_preferences = default_preferences.copy()
+                merged_preferences.update(user_prefs['preferences'])
+                return merged_preferences
+        
+        return default_preferences
+    
+    def get_existing_calendar_events(self, user_id: str = None, date: datetime = None) -> list:
+        """Get existing calendar events for conflict detection"""
+        if user_id and date:
+            start_of_day = date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = date.replace(hour=23, minute=59, second=59, microsecond=999999)
+            return self.db.get_tasks_by_date_range(user_id, start_of_day, end_of_day)
+        return []
+    
+    def analyze_user_patterns(self, user_id: str = None) -> dict:
+        """Analyze user's historical task completion patterns"""
+        if user_id:
+            patterns = self.db.get_user_patterns(user_id)
+            if patterns:
+                category_durations = {}
+                for pattern in patterns:
+                    category = pattern.get('task_category', 'general')
+                    if category not in category_durations:
+                        category_durations[category] = []
+                    actual_duration = pattern.get('actual_duration')
+                    if actual_duration:
+                        category_durations[category].append(actual_duration)
+                
+                # Calculate averages
+                for category in category_durations:
+                    durations = category_durations[category]
+                    if durations:
+                        category_durations[category] = sum(durations) / len(durations)
+                    else:
+                        category_durations[category] = 60  # Default duration
+                
+                # Get optimal time slots
+                optimal_slots = []
+                for pattern in patterns:
+                    slot = pattern.get('optimal_time_slot')
+                    if slot and slot not in optimal_slots:
+                        optimal_slots.append(slot)
+                
+                # Calculate average completion time
+                actual_durations = [p.get('actual_duration') for p in patterns if p.get('actual_duration')]
+                avg_completion = sum(actual_durations) / len(actual_durations) if actual_durations else 60
+                
+                return {
+                    "average_completion_time": avg_completion,
+                    "optimal_time_slots": optimal_slots or ["morning"],
+                    "category_durations": category_durations
+                }
+        
+        return {
+            "average_completion_time": 60,
+            "optimal_time_slots": ["morning"],
+            "category_durations": {}
+        }
+    
+    def generate_schedule_with_ai(self, user_input: str, user_id: str = None, date: datetime = None) -> TaskPlanningResponse:
+        """Use OpenAI to generate optimized schedule"""
+        try:
+            preferences = self.get_user_preferences(user_id)
+            patterns = self.analyze_user_patterns(user_id)
+            existing_events = self.get_existing_calendar_events(user_id, date)
+            
+            system_prompt = f"""
+You are an intelligent scheduling assistant. Given a user's natural language request 
+and their existing calendar, create an optimized daily schedule.
+
+User Preferences:
+- Work hours: {preferences.get('work_hours', {})}
+- Focus times: {preferences.get('focus_times', [])}
+- Buffer time between tasks: {preferences['buffer_time']} minutes
+- Maximum daily tasks: {preferences['max_daily_tasks']}
+
+User Patterns (from historical data):
+- Average task completion time: {patterns['average_completion_time']} minutes
+- Optimal time slots: {patterns['optimal_time_slots']}
+- Category-specific durations: {patterns['category_durations']}
+
+Existing calendar events: {existing_events}
+
+Consider:
+- Task priorities and dependencies
+- Realistic time estimates based on user history
+- User's energy patterns and preferred focus times
+- Buffer time between tasks
+- Existing calendar commitments
+- Avoid scheduling conflicts
+
+Respond with a JSON object containing:
+{{
+  "scheduled_tasks": [
+    {{
+      "title": "task title",
+      "description": "task description",
+      "start_time": "2024-01-01T09:00:00",
+      "end_time": "2024-01-01T10:00:00",
+      "priority": 3,
+      "category": "work",
+      "reasoning": "why this time slot was chosen"
+    }}
+  ],
+  "summary": "Brief explanation of the scheduling decisions",
+  "conflicts": ["any conflicts found"],
+  "suggestions": ["optimization suggestions"]
+}}
+
+User request: "{user_input}"
+Date: {date.strftime('%Y-%m-%d') if date else datetime.now().strftime('%Y-%m-%d')}
+"""
+
+            print(f"🤖 Calling OpenAI API for schedule generation...")
+            print(f"📝 User input received: {user_input}")
+            response = get_openai_client().chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_input}
+                ],
+                temperature=0.7,
+                max_tokens=2000
+            )
+            print(f"✅ OpenAI API call successful")
+            print(f"🤖 Raw AI response: {response.choices[0].message.content[:200]}...")
+            
+            # Parse AI response
+            ai_response = response.choices[0].message.content
+            try:
+                schedule_data = json.loads(ai_response)
+            except json.JSONDecodeError:
+                # Fallback parsing if JSON is malformed
+                schedule_data = {
+                    "scheduled_tasks": [],
+                    "summary": "Failed to parse AI response",
+                    "conflicts": [],
+                    "suggestions": ["Please try rephrasing your request"]
+                }
+            
+            # Convert to ScheduledTask objects
+            scheduled_tasks = []
+            for task_data in schedule_data.get("scheduled_tasks", []):
+                try:
+                    scheduled_task = ScheduledTask(
+                        title=task_data["title"],
+                        description=task_data.get("description", ""),
+                        start_time=datetime.fromisoformat(task_data["start_time"]),
+                        end_time=datetime.fromisoformat(task_data["end_time"]),
+                        priority=TaskPriority(task_data.get("priority", 3)),
+                        category=TaskCategory(task_data.get("category", "general")),
+                        reasoning=task_data.get("reasoning", "")
+                    )
+                    scheduled_tasks.append(scheduled_task)
+                except Exception as e:
+                    print(f"Error parsing scheduled task: {e}")
+                    continue
+            
+            return TaskPlanningResponse(
+                scheduled_tasks=scheduled_tasks,
+                summary=schedule_data.get("summary", "Schedule generated successfully"),
+                conflicts=schedule_data.get("conflicts", []),
+                suggestions=schedule_data.get("suggestions", [])
+            )
+            
+        except Exception as e:
+            print(f"💥 Error generating schedule with AI: {e}")
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
+            return TaskPlanningResponse(
+                scheduled_tasks=[],
+                summary=f"Failed to generate schedule due to AI service error: {str(e)}",
+                conflicts=[],
+                suggestions=["Please check OpenAI API key and try again"]
+            )
+
+def format_time_for_display(iso_time_string):
+    """
+    Convert ISO time string to human-readable format
+    """
+    try:
+        dt = datetime.fromisoformat(iso_time_string.replace('Z', '+00:00'))
+        return dt.strftime("%I:%M %p")  # e.g., "09:00 AM"
+    except:
+        return iso_time_string
+
+def format_date_for_display(iso_time_string):
+    """
+    Convert ISO time string to human-readable date format
+    """
+    try:
+        dt = datetime.fromisoformat(iso_time_string.replace('Z', '+00:00'))
+        return dt.strftime("%B %d, %Y")  # e.g., "September 27, 2025"
+    except:
+        return iso_time_string
+
+def add_display_times(task):
+    """
+    Add human-readable time formats to a task
+    """
+    task_copy = task.copy()
+    task_copy['start_time_display'] = format_time_for_display(task['start'])
+    task_copy['end_time_display'] = format_time_for_display(task['end'])
+    task_copy['date_display'] = format_date_for_display(task['start'])
+    return task_copy
+
+def extract_tasks_from_text(text):
+    """
+    Use OpenAI to extract tasks from the input text
+    """
+    prompt = f"""
+    Analyze the following text and extract all DISTINCT tasks/activities mentioned. 
+    For each task, estimate how long it might take in hours (be realistic and reasonable).
+    
+    IMPORTANT: 
+    - Extract only UNIQUE tasks (no duplicates)
+    - Each task should be distinct and non-overlapping
+    - Use clear, specific task names
+    - If a specific time is mentioned for a task, ALWAYS include the time in the task name (e.g., "Meeting at 2pm", "Gym at 3:30pm")
+    - If a time range is mentioned, include the full range (e.g., "Meeting 2pm to 4pm", "Gym 3:30pm-5:30pm")
+    - Consider realistic timing for activities (meals, sleep, etc.)
+    
+    Guidelines for duration estimation:
+    - Sleep/nap: 0.5 hours
+    - Exercise/gym: 1-1.5 hours
+    - Work projects: 2-4 hours
+    - Meetings: 0.5-2 hours
+    - Shopping: 1-2 hours
+    - Cooking: 0.5-1.5 hours
+    - Study: 1-3 hours
+    - Phone calls: 0.25-0.5 hours
+    - Reading: 0.5-2 hours
+    - Cleaning: 0.5-2 hours
+    
+    Text: "{text}"
+    
+    Return ONLY a JSON array of objects with this exact format:
+    [
+        {{"name": "task name", "duration_hours": 2.5}},
+        {{"name": "another task", "duration_hours": 1.0}}
+    ]
+    
+    Do not include any other text, just the JSON array.
+    """
+    
+    try:
+        response = get_openai_client().chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a task extraction assistant. Extract tasks and estimate durations from text."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=500,
+            temperature=0.3
+        )
+        
+        content = response.choices[0].message.content.strip()
+        
+        # Clean up the response to ensure it's valid JSON
+        content = content.replace('```json', '').replace('```', '').strip()
+        
+        tasks = json.loads(content)
+        return tasks
+        
+    except json.JSONDecodeError as e:
+        print(f"JSON decode error: {e}")
+        print(f"Raw content: {content if 'content' in locals() else 'No content'}")
+        return []
+    except Exception as e:
+        print(f"Error extracting tasks: {e}")
+        return []
+
+def extract_explicit_times(task_name):
+    """
+    Extract explicit start and end times mentioned in task name
+    Returns (start_time, end_time) where each is (hour, minute) or None
+    """
+    import re
+    
+    # Patterns for time extraction
+    time_patterns = [
+        r'(\d{1,2}):(\d{2})\s*(am|pm)?',  # 2:30, 2:30pm, 14:30
+        r'(\d{1,2})\s*(am|pm)',           # 2pm, 2 am, 14pm
+        r'at\s+(\d{1,2}):(\d{2})',        # at 2:30
+        r'at\s+(\d{1,2})\s*(am|pm)',      # at 2pm
+    ]
+    
+    def parse_time(match):
+        groups = match.groups()
+        if len(groups) >= 2:
+            hour = int(groups[0])
+            minute = int(groups[1]) if groups[1] and groups[1].isdigit() else 0
+            
+            # Handle AM/PM
+            if len(groups) >= 3 and groups[2]:
+                ampm = groups[2].lower()
+                if ampm == 'pm' and hour != 12:
+                    hour += 12
+                elif ampm == 'am' and hour == 12:
+                    hour = 0
+            elif len(groups) >= 2 and groups[1] and groups[1] in ['am', 'pm']:
+                ampm = groups[1].lower()
+                if ampm == 'pm' and hour != 12:
+                    hour += 12
+                elif ampm == 'am' and hour == 12:
+                    hour = 0
+            
+            # Validate hour and minute
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return (hour, minute)
+        return None
+    
+    task_lower = task_name.lower()
+    
+    # Look for time ranges (e.g., "2pm to 4pm", "2:30-4:30")
+    range_patterns = [
+        r'(\d{1,2}):(\d{2})\s*(am|pm)?\s*to\s*(\d{1,2}):(\d{2})\s*(am|pm)?',  # 2:30pm to 4:30pm
+        r'(\d{1,2})\s*(am|pm)\s*to\s*(\d{1,2})\s*(am|pm)',                    # 2pm to 4pm
+        r'(\d{1,2}):(\d{2})\s*(am|pm)?\s*-\s*(\d{1,2}):(\d{2})\s*(am|pm)?',   # 2:30pm-4:30pm
+        r'(\d{1,2})\s*(am|pm)\s*-\s*(\d{1,2})\s*(am|pm)',                     # 2pm-4pm
+    ]
+    
+    for pattern in range_patterns:
+        match = re.search(pattern, task_lower)
+        if match:
+            groups = match.groups()
+            if len(groups) >= 6:
+                # Parse start time
+                start_hour = int(groups[0])
+                start_minute = int(groups[1]) if groups[1] and groups[1].isdigit() else 0
+                start_ampm = groups[2] if len(groups) > 2 else None
+                
+                # Parse end time
+                end_hour = int(groups[3])
+                end_minute = int(groups[4]) if groups[4] and groups[4].isdigit() else 0
+                end_ampm = groups[5] if len(groups) > 5 else None
+                
+                # Handle AM/PM for start time
+                if start_ampm:
+                    if start_ampm.lower() == 'pm' and start_hour != 12:
+                        start_hour += 12
+                    elif start_ampm.lower() == 'am' and start_hour == 12:
+                        start_hour = 0
+                
+                # Handle AM/PM for end time
+                if end_ampm:
+                    if end_ampm.lower() == 'pm' and end_hour != 12:
+                        end_hour += 12
+                    elif end_ampm.lower() == 'am' and end_hour == 12:
+                        end_hour = 0
+                
+                # Validate times
+                if (0 <= start_hour <= 23 and 0 <= start_minute <= 59 and 
+                    0 <= end_hour <= 23 and 0 <= end_minute <= 59):
+                    return ((start_hour, start_minute), (end_hour, end_minute))
+    
+    # Look for single times
+    for pattern in time_patterns:
+        match = re.search(pattern, task_lower)
+        if match:
+            time = parse_time(match)
+            if time:
+                return (time, None)
+    
+    return (None, None)
+
+def extract_explicit_time(task_name):
+    """
+    Extract explicit start time mentioned in task name (for backward compatibility)
+    Returns (hour, minute) if found, None otherwise
+    """
+    start_time, _ = extract_explicit_times(task_name)
+    return start_time
+
+def get_task_priority(task_name):
+    """
+    Get the priority level of a task (1 = highest priority, 5 = lowest priority)
+    """
+    task_lower = task_name.lower()
+    
+    # Priority 0: User-specified explicit times (highest priority)
+    if extract_explicit_time(task_name):
+        return 0
+    
+    # Priority 1: Critical time-sensitive events
+    if any(word in task_lower for word in ['meeting', 'appointment', 'interview', 'deadline']):
+        return 1
+    
+    # Priority 2: Essential daily activities (meals, sleep)
+    if any(word in task_lower for word in ['breakfast', 'lunch', 'dinner', 'supper', 'eat', 'sleep']):
+        return 2
+    
+    # Priority 3: Work and important tasks
+    if any(word in task_lower for word in ['work', 'project', 'study', 'presentation', 'report']):
+        return 3
+    
+    # Priority 4: Health and exercise
+    if any(word in task_lower for word in ['gym', 'exercise', 'workout', 'run', 'jog']):
+        return 4
+    
+    # Priority 5: Low priority tasks (calls, shopping, cleaning)
+    if any(word in task_lower for word in ['call', 'phone', 'shop', 'grocery', 'clean', 'laundry']):
+        return 5
+    
+    # Default priority
+    return 3
+
+def get_optimal_time_for_task(task_name, current_time):
+    """
+    Get the optimal time for a specific task based on its type or explicit time
+    """
+    # First check for explicit time in task name
+    explicit_time = extract_explicit_time(task_name)
+    if explicit_time:
+        hour, minute = explicit_time
+        return current_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    
+    # Fall back to logical optimal times
+    task_lower = task_name.lower()
+    
+    # Meal times
+    if any(word in task_lower for word in ['breakfast', 'morning meal']):
+        return current_time.replace(hour=8, minute=0, second=0, microsecond=0)
+    elif any(word in task_lower for word in ['lunch', 'lunchtime']):
+        return current_time.replace(hour=12, minute=0, second=0, microsecond=0)
+    elif any(word in task_lower for word in ['dinner', 'evening meal', 'supper']):
+        return current_time.replace(hour=18, minute=0, second=0, microsecond=0)
+    
+    # Sleep times
+    elif any(word in task_lower for word in ['sleep', 'nap', 'rest']):
+        if 'nap' in task_lower:
+            return current_time.replace(hour=14, minute=0, second=0, microsecond=0)  # 2 PM nap
+        else:
+            return current_time.replace(hour=22, minute=0, second=0, microsecond=0)  # 10 PM sleep
+    
+    # Exercise times
+    elif any(word in task_lower for word in ['gym', 'exercise', 'workout', 'run', 'jog']):
+        return current_time.replace(hour=17, minute=0, second=0, microsecond=0)  # 5 PM exercise
+    
+    # Work/study times
+    elif any(word in task_lower for word in ['work', 'study', 'project', 'meeting', 'presentation']):
+        return current_time.replace(hour=9, minute=0, second=0, microsecond=0)  # 9 AM work
+    
+    # Default to current time
+    return current_time
+
+
+def has_time_conflict(new_start, new_end, existing_times):
+    """
+    Check if a new time slot conflicts with existing tasks
+    """
+    for existing_start, existing_end in existing_times:
+        # Check for overlap: new task starts before existing ends AND new task ends after existing starts
+        if new_start < existing_end and new_end > existing_start:
+            return True
+    return False
+
+def find_next_available_time(proposed_start, duration, existing_times, max_hour=22):
+    """
+    Find the next available time slot that doesn't conflict with existing tasks
+    """
+    current_time = proposed_start
+    end_time = current_time + duration
+    
+    # Try to find a slot within reasonable hours (9 AM to 10 PM)
+    while current_time.hour < max_hour:
+        if not has_time_conflict(current_time, end_time, existing_times):
+            return current_time
+        
+        # Move to next 30-minute slot
+        current_time += timedelta(minutes=30)
+        end_time = current_time + duration
+    
+    # If no slot found, move to next day
+    next_day = current_time.replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    return next_day
+
+def reschedule_for_priority_task(new_task, new_priority, existing_tasks):
+    """
+    Reschedule existing lower-priority tasks to make room for a high-priority task
+    """
+    if new_priority > 2:  # Only reschedule for high-priority tasks (priority 0-2)
+        return existing_tasks
+    
+    # Get the new task's time to check for conflicts
+    new_task_name = new_task.get('name', '')
+    explicit_start, explicit_end = extract_explicit_times(new_task_name)
+    
+    if not explicit_start:
+        return existing_tasks  # Only reschedule for explicit times
+    
+    # Calculate new task duration
+    if explicit_end:
+        new_duration = (explicit_end[0] * 60 + explicit_end[1]) - (explicit_start[0] * 60 + explicit_start[1])
+        new_duration = timedelta(minutes=new_duration)
+    else:
+        new_duration = timedelta(hours=1)  # Default 1 hour
+    
+    new_start_time = datetime.now().replace(hour=explicit_start[0], minute=explicit_start[1], second=0, microsecond=0)
+    new_end_time = new_start_time + new_duration
+    
+    # Sort existing tasks by priority (lowest priority first)
+    existing_tasks_with_priority = []
+    for task in existing_tasks:
+        priority = get_task_priority(task['name'])
+        existing_tasks_with_priority.append((task, priority))
+    
+    # Sort by priority (lowest first) so we reschedule least important tasks first
+    existing_tasks_with_priority.sort(key=lambda x: x[1], reverse=True)
+    
+    # Try to reschedule lower priority tasks that conflict with the new task
+    rescheduled_tasks = []
+    for task, priority in existing_tasks_with_priority:
+        if priority > new_priority:  # Only reschedule tasks with lower priority
+            task_start = datetime.fromisoformat(task['start'])
+            task_end = datetime.fromisoformat(task['end'])
+            
+            # Check if this task conflicts with the new task
+            if has_time_conflict(new_start_time, new_end_time, [(task_start, task_end)]):
+                # This task conflicts, try to reschedule it
+                duration = task_end - task_start
+                
+                # Get other existing times (excluding this task and the new task)
+                other_times = []
+                for other_task in existing_tasks:
+                    if other_task['name'] != task['name']:
+                        other_start = datetime.fromisoformat(other_task['start'])
+                        other_end = datetime.fromisoformat(other_task['end'])
+                        other_times.append((other_start, other_end))
+                
+                # Add the new task's time to avoid conflicts
+                other_times.append((new_start_time, new_end_time))
+                
+                # Find new time for this task
+                new_start = find_next_available_time(task_start, duration, other_times)
+                new_end = new_start + duration
+                
+                # Update the task
+                updated_task = task.copy()
+                updated_task['start'] = new_start.isoformat()
+                updated_task['end'] = new_end.isoformat()
+                rescheduled_tasks.append(updated_task)
+            else:
+                # No conflict, keep original time
+                rescheduled_tasks.append(task)
+        else:
+            rescheduled_tasks.append(task)
+    
+    return rescheduled_tasks
+
+def schedule_tasks(tasks, start_date=None, existing_tasks=None):
+    """
+    Schedule tasks optimally throughout the day with realistic timing
+    """
+    if not tasks:
+        return []
+    
+    # Default to today if no start date provided
+    if start_date is None:
+        start_date = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    else:
+        start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+    
+    # Get existing task times to avoid conflicts
+    existing_times = []
+    if existing_tasks:
+        for task in existing_tasks:
+            try:
+                start_time = datetime.fromisoformat(task['start'])
+                end_time = datetime.fromisoformat(task['end'])
+                existing_times.append((start_time, end_time))
+            except:
+                continue
+    
+    scheduled_tasks = []
+    
+    # Sort tasks by optimal time, prioritizing explicit times
+    tasks_with_times = []
+    
+    for task in tasks:
+        task_name = task.get('name', 'Unknown Task')
+        optimal_time = get_optimal_time_for_task(task_name, start_date)
+        tasks_with_times.append((task, optimal_time))
+    
+    # Sort by optimal time, but prioritize explicit times
+    def sort_key(task_time_tuple):
+        task, optimal_time = task_time_tuple
+        task_name = task.get('name', '')
+        explicit_time = extract_explicit_time(task_name)
+        if explicit_time:
+            # Use explicit time for sorting
+            hour, minute = explicit_time
+            return start_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        else:
+            # Use optimal time for sorting
+            return optimal_time
+    
+    tasks_with_times.sort(key=sort_key)
+    
+    current_time = start_date
+    
+    for i, (task, optimal_time) in enumerate(tasks_with_times):
+        task_name = task.get('name', 'Unknown Task')
+        duration_hours = float(task.get('duration_hours', 1.0))
+        
+        # Cap duration at 6 hours to prevent unrealistic scheduling
+        duration_hours = min(duration_hours, 6.0)
+        
+        # Convert hours to timedelta
+        duration = timedelta(hours=duration_hours)
+        
+        # Check if this task has explicit times
+        explicit_start, explicit_end = extract_explicit_times(task_name)
+        if explicit_start:
+            # Use explicit start time regardless of current time or optimal time
+            hour, minute = explicit_start
+            task_start = start_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            
+            # If explicit end time is provided, calculate duration from it
+            if explicit_end:
+                end_hour, end_minute = explicit_end
+                task_end_time = start_date.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+                duration = task_end_time - task_start
+                duration_hours = duration.total_seconds() / 3600
+                duration = timedelta(hours=duration_hours)
+        else:
+            # Use optimal time if it's later than current time, otherwise use current time
+            if optimal_time > current_time:
+                task_start = optimal_time
+            else:
+                task_start = current_time
+        
+        # Check for conflicts with existing tasks
+        if existing_times:
+            # If this task has an explicit time, it has priority 0 and should force rescheduling
+            task_priority = get_task_priority(task_name)
+            if task_priority == 0:  # Explicit time - highest priority
+                # Don't change the start time, let conflicts be handled by rescheduling
+                pass
+            else:
+                # For non-explicit times, find next available time
+                task_start = find_next_available_time(task_start, duration, existing_times)
+        
+        # Check if task fits in current day (extend to 10 PM for evening activities)
+        work_end = task_start.replace(hour=22, minute=0)
+        if task_start + duration > work_end:
+            # Move to next day
+            task_start = task_start.replace(hour=9, minute=0) + timedelta(days=1)
+        
+        # Calculate end time
+        end_time = task_start + duration
+        
+        # Add this task's time to existing_times for next tasks
+        existing_times.append((task_start, end_time))
+        
+        scheduled_tasks.append({
+            "name": task_name,
+            "start": task_start.isoformat(),
+            "end": end_time.isoformat()
+        })
+        
+        # Update current_time for next task with standard break
+        break_time = timedelta(minutes=30)
+        current_time = end_time + break_time
+    
+    return scheduled_tasks
+
+@app.route('/schedule', methods=['POST'])
+def schedule_tasks_endpoint():
+    """
+    Main endpoint to schedule tasks from text input and append to persistent list
+    """
+    global persistent_tasks
+    
+    try:
+        data = request.get_json()
+        
+        if not data or 'text' not in data:
+            return jsonify({"error": "Please provide 'text' field in request body"}), 400
+        
+        text = data['text']
+        start_date = data.get('start_date')  # Optional start date
+        
+        # Extract tasks from text
+        tasks = extract_tasks_from_text(text)
+        
+        if not tasks:
+            return jsonify({"error": "No tasks could be extracted from the text"}), 400
+        
+        # Check if any new tasks are high priority and need rescheduling
+        new_task_priorities = [get_task_priority(task['name']) for task in tasks]
+        highest_new_priority = min(new_task_priorities) if new_task_priorities else 3
+        
+        # If we have high-priority tasks (including explicit times), try to reschedule existing lower-priority tasks
+        if highest_new_priority <= 2 and persistent_tasks:
+            # Reschedule existing tasks to make room for high-priority tasks
+            persistent_tasks = reschedule_for_priority_task(tasks[0], highest_new_priority, persistent_tasks)
+        
+        # Schedule the tasks, considering existing tasks to avoid conflicts
+        scheduled_tasks = schedule_tasks(tasks, start_date, persistent_tasks)
+        
+        # Append new tasks to persistent list
+        persistent_tasks.extend(scheduled_tasks)
+        
+        # Add display times to all tasks
+        new_tasks_with_display = [add_display_times(task) for task in scheduled_tasks]
+        all_tasks_with_display = [add_display_times(task) for task in persistent_tasks]
+        
+        # Sort all tasks chronologically by start time
+        all_tasks_with_display.sort(key=lambda x: x['start'])
+        
+        return jsonify({
+            "new_tasks": new_tasks_with_display,
+            "all_tasks": all_tasks_with_display,
+            "original_text": text,
+            "extracted_tasks": tasks
+        })
+        
+    except Exception as e:
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+
+@app.route('/tasks', methods=['GET'])
+def get_all_tasks():
+    """
+    Get all persistent tasks with display times in chronological order
+    """
+    global persistent_tasks
+    tasks_with_display = [add_display_times(task) for task in persistent_tasks]
+    
+    # Sort tasks chronologically by start time
+    tasks_with_display.sort(key=lambda x: x['start'])
+    
+    return jsonify({
+        "tasks": tasks_with_display,
+        "total_count": len(persistent_tasks)
+    })
+
+@app.route('/tasks', methods=['DELETE'])
+def clear_all_tasks():
+    """
+    Clear all persistent tasks
+    """
+    global persistent_tasks
+    persistent_tasks = []
+    return jsonify({
+        "message": "All tasks cleared",
+        "tasks": persistent_tasks
+    })
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """
+    Health check endpoint
+    """
+    return jsonify({"status": "healthy", "message": "TimeAPI is running"})
+
+@app.route('/', methods=['GET'])
+def home():
+    """
+    Home endpoint with API documentation
+    """
+    return jsonify({
+        "message": "TimeAPI - Advanced Task Scheduling Service with Supabase",
+        "version": "2.0",
+        "features": [
+            "AI-powered task scheduling",
+            "Supabase database integration",
+            "User personalization",
+            "Schedule optimization",
+            "Conflict detection",
+            "Task management"
+        ],
+        "endpoints": {
+            "Basic Scheduling": {
+                "POST /schedule": "Schedule tasks from text input (legacy)",
+                "GET /tasks": "Get all scheduled tasks (legacy)",
+                "DELETE /tasks": "Clear all tasks (legacy)"
+            },
+            "Advanced Scheduling": {
+                "POST /api/plan": "AI-powered task planning with personalization",
+                "POST /api/optimize": "Optimize existing schedule using AI",
+                "POST /api/accept": "Accept generated schedule and save to database",
+                "GET /api/conflicts": "Check for scheduling conflicts",
+                "GET /api/tasks": "Get user tasks from database",
+                "PUT /api/tasks/<id>": "Update specific task",
+                "DELETE /api/tasks/<id>": "Delete specific task",
+                "PUT /api/tasks/<id>/complete": "Mark task as completed with actual duration"
+            },
+            "User Management": {
+                "POST /api/user/create": "Create new user with Google authentication",
+                "GET /api/user/<google_id>": "Get user by Google ID",
+                "GET /api/user/stats": "Get user task statistics",
+                "GET /api/user/insights": "Get productivity insights"
+            },
+            "Utility": {
+                "GET /health": "Health check",
+                "GET /api/test-openai": "Test OpenAI API connection",
+                "GET /docs": "Interactive API documentation",
+                "GET /": "This API information"
+            }
+        },
+        "example_requests": {
+            "basic_scheduling": {
+                "endpoint": "POST /schedule",
+                "body": {"text": "I have an ML project and want to go to the gym"}
+            },
+            "advanced_planning": {
+                "endpoint": "POST /api/plan",
+                "body": {
+                    "user_input": "I need to work on my presentation, exercise, and have dinner",
+                    "user_id": "user123",
+                    "date": "2024-01-15T00:00:00Z"
+                }
+            },
+            "optimize_schedule": {
+                "endpoint": "POST /api/optimize",
+                "body": {
+                    "user_id": "user123",
+                    "date": "2024-01-15T00:00:00Z"
+                }
+            }
+        },
+        "database_required": "Supabase configuration required for advanced features"
+    })
+
+@app.route('/docs')
+def docs():
+    """
+    Serve the API documentation page
+    """
+    try:
+        with open('docs.html', 'r', encoding='utf-8') as f:
+            return f.read(), 200, {'Content-Type': 'text/html'}
+    except FileNotFoundError:
+        return jsonify({"error": "Documentation not found"}), 404
+
+# Advanced Scheduling Endpoints
+
+@app.route('/api/plan', methods=['POST'])
+def plan_tasks_advanced():
+    """
+    Advanced task planning with AI optimization
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'user_input' not in data:
+            return jsonify({"error": "Please provide 'user_input' field in request body"}), 400
+        
+        user_input = data['user_input']
+        user_id = data.get('user_id')  # Optional user ID for personalization
+        date_str = data.get('date')
+        
+        # Parse date if provided
+        target_date = None
+        if date_str:
+            try:
+                target_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            except:
+                return jsonify({"error": "Invalid date format. Use ISO format."}), 400
+        
+        # Generate schedule using AI
+        optimizer = ScheduleOptimizer()
+        schedule_response = optimizer.generate_schedule_with_ai(user_input, user_id, target_date)
+        
+        return jsonify(schedule_response.to_dict())
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to plan tasks: {str(e)}"}), 500
+
+@app.route('/api/optimize', methods=['POST'])
+def optimize_schedule():
+    """
+    Optimize existing schedule using AI
+    """
+    try:
+        data = request.get_json()
+        
+        user_id = data.get('user_id')
+        date_str = data.get('date')
+        
+        # Parse date if provided
+        target_date = None
+        if date_str:
+            try:
+                target_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            except:
+                return jsonify({"error": "Invalid date format. Use ISO format."}), 400
+        
+        optimizer = ScheduleOptimizer()
+        
+        # Get existing tasks for the date
+        if user_id and target_date:
+            start_of_day = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            existing_tasks = db.get_tasks_by_date_range(user_id, start_of_day, end_of_day)
+            
+            if not existing_tasks:
+                return jsonify({
+                    "optimized_schedule": [],
+                    "changes_made": [],
+                    "reasoning": "No tasks found for optimization",
+                    "success": False
+                })
+            
+            # Create optimization prompt
+            task_descriptions = []
+            for task in existing_tasks:
+                task_descriptions.append(f"- {task['title']} (Priority: {task.get('priority', 3)}, Duration: {task.get('estimated_duration', 60)}min)")
+            
+            optimization_input = f"Optimize the following tasks: {'; '.join(task_descriptions)}"
+            
+            # Use AI to optimize
+            schedule_response = optimizer.generate_schedule_with_ai(optimization_input, user_id, target_date)
+            
+            return jsonify({
+                "optimized_schedule": [
+                    {
+                        "title": task.title,
+                        "description": task.description,
+                        "start_time": task.start_time.isoformat() if task.start_time else None,
+                        "end_time": task.end_time.isoformat() if task.end_time else None,
+                        "priority": task.priority.value,
+                        "category": task.category.value,
+                        "reasoning": task.reasoning
+                    }
+                    for task in schedule_response.scheduled_tasks
+                ],
+                "changes_made": [],
+                "reasoning": schedule_response.summary,
+                "success": True
+            })
+        else:
+            return jsonify({
+                "optimized_schedule": [],
+                "changes_made": [],
+                "reasoning": "User ID and date required for optimization",
+                "success": False
+            })
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to optimize schedule: {str(e)}"}), 500
+
+@app.route('/api/accept', methods=['POST'])
+def accept_schedule():
+    """
+    Accept a generated schedule and save tasks to database
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'scheduled_tasks' not in data:
+            return jsonify({"error": "Please provide 'scheduled_tasks' field in request body"}), 400
+        
+        user_id = data.get('user_id')
+        scheduled_tasks_data = data['scheduled_tasks']
+        
+        if not scheduled_tasks_data:
+            return jsonify({
+                "message": "No tasks to create",
+                "tasks_created": 0
+            })
+        
+        created_tasks = []
+        for task_data in scheduled_tasks_data:
+            task_record = {
+                "user_id": user_id,
+                "title": task_data["title"],
+                "description": task_data.get("description", ""),
+                "estimated_duration": 60,  # Default duration
+                "priority": task_data.get("priority", 3),
+                "category": task_data.get("category", "general"),
+                "scheduled_start": task_data.get("start_time"),
+                "scheduled_end": task_data.get("end_time"),
+                "status": "pending"
+            }
+            
+            # Calculate duration if start and end times are provided
+            if task_data.get("start_time") and task_data.get("end_time"):
+                start_time = datetime.fromisoformat(task_data["start_time"])
+                end_time = datetime.fromisoformat(task_data["end_time"])
+                duration_minutes = int((end_time - start_time).total_seconds() / 60)
+                task_record["estimated_duration"] = duration_minutes
+            
+            created_task = db.create_task(task_record)
+            if created_task:
+                created_tasks.append(created_task)
+        
+        return jsonify({
+            "message": f"Successfully created {len(created_tasks)} tasks",
+            "tasks_created": len(created_tasks)
+        })
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to accept schedule: {str(e)}"}), 500
+
+@app.route('/api/conflicts', methods=['GET'])
+def check_schedule_conflicts():
+    """
+    Check for scheduling conflicts on a specific date
+    """
+    try:
+        user_id = request.args.get('user_id')
+        date_str = request.args.get('date')
+        
+        if not user_id or not date_str:
+            return jsonify({"error": "user_id and date parameters are required"}), 400
+        
+        # Parse date
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
+        
+        start_of_day = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_day = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+        # Get scheduled tasks
+        tasks = db.get_tasks_by_date_range(user_id, start_of_day, end_of_day)
+        
+        # Check for overlapping tasks
+        conflicts = []
+        for i, task1 in enumerate(tasks):
+            if not task1.get('scheduled_start') or not task1.get('scheduled_end'):
+                continue
+                
+            for j, task2 in enumerate(tasks[i+1:], i+1):
+                if not task2.get('scheduled_start') or not task2.get('scheduled_end'):
+                    continue
+                
+                # Parse times
+                try:
+                    start1 = datetime.fromisoformat(task1['scheduled_start'])
+                    end1 = datetime.fromisoformat(task1['scheduled_end'])
+                    start2 = datetime.fromisoformat(task2['scheduled_start'])
+                    end2 = datetime.fromisoformat(task2['scheduled_end'])
+                    
+                    # Check for overlap
+                    if start1 < end2 and end1 > start2:
+                        conflicts.append({
+                            "task1": {"id": task1['id'], "title": task1['title'], "time": f"{start1} - {end1}"},
+                            "task2": {"id": task2['id'], "title": task2['title'], "time": f"{start2} - {end2}"},
+                            "type": "task_overlap"
+                        })
+                except:
+                    continue
+        
+        return jsonify({
+            "date": date_str,
+            "conflicts": conflicts,
+            "total_conflicts": len(conflicts),
+            "has_conflicts": len(conflicts) > 0
+        })
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to check conflicts: {str(e)}"}), 500
+
+@app.route('/api/tasks', methods=['GET'])
+def get_user_tasks():
+    """
+    Get all tasks for a specific user
+    """
+    try:
+        user_id = request.args.get('user_id')
+        
+        if not user_id:
+            return jsonify({"error": "user_id parameter is required"}), 400
+        
+        tasks = db.get_tasks_by_user(user_id)
+        
+        return jsonify({
+            "tasks": tasks,
+            "total_count": len(tasks)
+        })
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to get tasks: {str(e)}"}), 500
+
+@app.route('/api/tasks/<task_id>', methods=['PUT'])
+def update_task(task_id):
+    """
+    Update a specific task
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+        
+        updated_task = db.update_task(task_id, data)
+        
+        if updated_task:
+            return jsonify({
+                "message": "Task updated successfully",
+                "task": updated_task
+            })
+        else:
+            return jsonify({"error": "Task not found or update failed"}), 404
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to update task: {str(e)}"}), 500
+
+@app.route('/api/tasks/<task_id>', methods=['DELETE'])
+def delete_task(task_id):
+    """
+    Delete a specific task
+    """
+    try:
+        success = db.delete_task(task_id)
+        
+        if success:
+            return jsonify({"message": "Task deleted successfully"})
+        else:
+            return jsonify({"error": "Task not found or delete failed"}), 404
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to delete task: {str(e)}"}), 500
+
+@app.route('/api/test-openai', methods=['GET'])
+def test_openai():
+    """
+    Test OpenAI API connection
+    """
+    try:
+        print(f"🧪 Testing OpenAI API connection...")
+        response = get_openai_client().chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": "Say hello in one word"}
+            ],
+            max_tokens=10
+        )
+        result = response.choices[0].message.content
+        print(f"✅ OpenAI test successful: {result}")
+        return jsonify({"status": "success", "response": result})
+    except Exception as e:
+        print(f"❌ OpenAI test failed: {e}")
+        return jsonify({"status": "error", "error": str(e)})
+
+@app.route('/api/user/stats', methods=['GET'])
+def get_user_stats():
+    """
+    Get user task statistics
+    """
+    try:
+        user_id = request.args.get('user_id')
+        days_back = int(request.args.get('days_back', 30))
+        
+        if not user_id:
+            return jsonify({"error": "user_id parameter is required"}), 400
+        
+        stats = db.get_user_task_stats(user_id, days_back)
+        
+        if stats:
+            return jsonify({
+                "user_id": user_id,
+                "days_back": days_back,
+                "stats": stats
+            })
+        else:
+            return jsonify({
+                "user_id": user_id,
+                "days_back": days_back,
+                "stats": {
+                    "total_tasks": 0,
+                    "completed_tasks": 0,
+                    "completion_rate": 0.0,
+                    "avg_completion_time": 0.0
+                }
+            })
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to get user stats: {str(e)}"}), 500
+
+@app.route('/api/user/insights', methods=['GET'])
+def get_productivity_insights():
+    """
+    Get productivity insights for a user
+    """
+    try:
+        user_id = request.args.get('user_id')
+        
+        if not user_id:
+            return jsonify({"error": "user_id parameter is required"}), 400
+        
+        insights = db.get_productivity_insights(user_id)
+        
+        return jsonify({
+            "user_id": user_id,
+            "insights": insights
+        })
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to get productivity insights: {str(e)}"}), 500
+
+@app.route('/api/user/create', methods=['POST'])
+def create_user():
+    """
+    Create a new user with Google authentication
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+        
+        required_fields = ['google_id', 'email']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        user_data = {
+            'google_id': data['google_id'],
+            'email': data['email'],
+            'name': data.get('name', ''),
+            'calendar_id': data.get('calendar_id', ''),
+            'preferences': data.get('preferences', {})
+        }
+        
+        created_user = db.create_user_with_google(**user_data)
+        
+        if created_user:
+            return jsonify({
+                "message": "User created successfully",
+                "user": created_user
+            })
+        else:
+            return jsonify({"error": "Failed to create user"}), 500
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to create user: {str(e)}"}), 500
+
+@app.route('/api/user/<google_id>', methods=['GET'])
+def get_user_by_google_id(google_id):
+    """
+    Get user by Google ID
+    """
+    try:
+        user = db.get_user_by_google_id(google_id)
+        
+        if user:
+            return jsonify({"user": user})
+        else:
+            return jsonify({"error": "User not found"}), 404
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to get user: {str(e)}"}), 500
+
+@app.route('/api/tasks/<task_id>/complete', methods=['PUT'])
+def mark_task_complete(task_id):
+    """
+    Mark a task as completed and record actual duration
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+        
+        actual_duration = data.get('actual_duration')
+        if actual_duration is None:
+            return jsonify({"error": "actual_duration is required"}), 400
+        
+        update_data = {
+            'status': 'completed',
+            'actual_duration': actual_duration
+        }
+        
+        updated_task = db.update_task(task_id, update_data)
+        
+        if updated_task:
+            # Save pattern for AI learning
+            pattern_data = {
+                'user_id': updated_task['user_id'],
+                'task_category': updated_task.get('category', 'general'),
+                'estimated_duration': updated_task.get('estimated_duration'),
+                'actual_duration': actual_duration,
+                'completion_rate': 1.0,  # Completed task
+                'optimal_time_slot': 'morning'  # Default, could be calculated from scheduled_start
+            }
+            db.save_task_pattern(pattern_data)
+            
+            return jsonify({
+                "message": "Task marked as completed",
+                "task": updated_task
+            })
+        else:
+            return jsonify({"error": "Task not found or update failed"}), 404
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to mark task complete: {str(e)}"}), 500
+
+# For Vercel deployment
+if __name__ == '__main__':
+    # Local development
+    port = int(os.getenv('PORT', 5001))
+    debug = os.getenv('FLASK_ENV') != 'production'
+    app.run(debug=debug, host='0.0.0.0', port=port)
