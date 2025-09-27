@@ -217,19 +217,30 @@ Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}
                     start_time = datetime.fromisoformat(task_data["start_time"])
                     end_time = datetime.fromisoformat(task_data["end_time"])
                     
+                    print(f"🔍 Validating task '{task_data['title']}':")
+                    print(f"   Original start: {start_time}")
+                    print(f"   Original end: {end_time}")
+                    print(f"   Current time: {current_time}")
+                    print(f"   Start in past? {start_time <= current_time}")
+                    print(f"   End in past? {end_time <= current_time}")
+                    
                     # Validate and adjust times to ensure they're in the future
                     if start_time <= current_time:
                         # If start time is in the past, adjust it to current time + 15 minutes
+                        original_start = start_time
                         start_time = current_time + timedelta(minutes=15)
                         # Adjust end time accordingly
-                        duration = end_time - datetime.fromisoformat(task_data["start_time"])
+                        duration = end_time - original_start
                         end_time = start_time + duration
-                        print(f"⚠️ Adjusted past time for task '{task_data['title']}' to {start_time}")
+                        print(f"⚠️ ADJUSTED past time for task '{task_data['title']}' from {original_start} to {start_time}")
                     
                     if end_time <= start_time:
                         # Ensure end time is after start time
                         end_time = start_time + timedelta(minutes=60)  # Default 1 hour duration
-                        print(f"⚠️ Adjusted end time for task '{task_data['title']}' to {end_time}")
+                        print(f"⚠️ ADJUSTED end time for task '{task_data['title']}' to {end_time}")
+                    
+                    print(f"   Final start: {start_time}")
+                    print(f"   Final end: {end_time}")
                     
                     scheduled_task = ScheduledTask(
                         title=task_data["title"],
