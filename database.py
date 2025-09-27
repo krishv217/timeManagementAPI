@@ -104,10 +104,17 @@ class Database:
         """Get all tasks for a user"""
         try:
             self._ensure_initialized()
-            # Try with regular client first, if it fails due to RLS, use service client
+            # Try with regular client first
             try:
                 result = self.supabase.table('tasks').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
-                return result.data if result.data else []
+                tasks = result.data if result.data else []
+                # If we get empty results, it might be due to RLS, so try service client
+                if not tasks:
+                    print(f"No tasks found with regular client, trying service client for user: {user_id}")
+                    service_client = self._get_service_client()
+                    result = service_client.table('tasks').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
+                    tasks = result.data if result.data else []
+                return tasks
             except Exception as rls_error:
                 print(f"RLS error with regular client, trying service client: {rls_error}")
                 # Use service client to bypass RLS
