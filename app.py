@@ -1547,6 +1547,246 @@ def mark_task_complete(task_id):
     except Exception as e:
         return jsonify({"error": f"Failed to mark task complete: {str(e)}"}), 500
 
+# Google Calendar Integration Endpoints
+# These endpoints return JSON in the format expected by your Google Calendar server
+
+@app.route('/api/calendar/events/create', methods=['POST'])
+def create_calendar_event():
+    """
+    Create a calendar event - returns JSON compatible with CreateEventRequest
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'scheduled_tasks' not in data:
+            return jsonify({"error": "Please provide 'scheduled_tasks' field in request body"}), 400
+        
+        user_id = data.get('user_id')
+        scheduled_tasks_data = data['scheduled_tasks']
+        calendar_id = data.get('calendar_id', 'primary')
+        
+        if not scheduled_tasks_data:
+            return jsonify({"error": "No tasks provided"}), 400
+        
+        # Convert scheduled tasks to Google Calendar event format
+        calendar_events = []
+        for task_data in scheduled_tasks_data:
+            event = {
+                "title": task_data["title"],
+                "start_datetime": task_data.get("start_time", ""),
+                "end_datetime": task_data.get("end_time", ""),
+                "description": task_data.get("description", ""),
+                "calendar_id": calendar_id
+            }
+            calendar_events.append(event)
+        
+        return jsonify({
+            "events": calendar_events,
+            "message": f"Created {len(calendar_events)} calendar events",
+            "calendar_id": calendar_id
+        })
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to create calendar events: {str(e)}"}), 500
+
+@app.route('/api/calendar/events/find', methods=['POST'])
+def find_calendar_events():
+    """
+    Find calendar events by date - returns JSON compatible with FindEventsRequest
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'date' not in data:
+            return jsonify({"error": "Please provide 'date' field in request body"}), 400
+        
+        date_str = data['date']
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return jsonify({"error": "user_id parameter is required"}), 400
+        
+        # Get user tasks for the specified date
+        try:
+            target_date = datetime.fromisoformat(date_str)
+            start_of_day = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            tasks = db.get_tasks_by_date_range(user_id, start_of_day, end_of_day)
+            
+            # Convert tasks to calendar event format
+            events = []
+            for task in tasks:
+                if task.get('scheduled_start') and task.get('scheduled_end'):
+                    event = {
+                        "title": task["title"],
+                        "start_datetime": task["scheduled_start"],
+                        "end_datetime": task["scheduled_end"],
+                        "description": task.get("description", ""),
+                        "calendar_id": "primary"
+                    }
+                    events.append(event)
+            
+            return jsonify({
+                "date": date_str,
+                "events": events,
+                "total_events": len(events)
+            })
+            
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD format"}), 400
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to find calendar events: {str(e)}"}), 500
+
+@app.route('/api/calendar/events/move', methods=['POST'])
+def move_calendar_event():
+    """
+    Move a calendar event - returns JSON compatible with MoveEventRequest
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'task_id' not in data:
+            return jsonify({"error": "Please provide 'task_id' field in request body"}), 400
+        
+        task_id = data['task_id']
+        new_start_datetime = data.get('new_start_datetime')
+        new_end_datetime = data.get('new_end_datetime')
+        calendar_id = data.get('calendar_id', 'primary')
+        
+        if not new_start_datetime or not new_end_datetime:
+            return jsonify({"error": "new_start_datetime and new_end_datetime are required"}), 400
+        
+        # Get the current task
+        task = db.get_task_by_id(task_id)
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+        
+        # Update the task with new times
+        update_data = {
+            'scheduled_start': new_start_datetime,
+            'scheduled_end': new_end_datetime
+        }
+        
+        updated_task = db.update_task(task_id, update_data)
+        
+        if updated_task:
+            move_request = {
+                "title": updated_task["title"],
+                "current_start_datetime": task["scheduled_start"],
+                "new_start_datetime": new_start_datetime,
+                "new_end_datetime": new_end_datetime,
+                "calendar_id": calendar_id
+            }
+            
+            return jsonify({
+                "move_request": move_request,
+                "message": "Event move request created successfully",
+                "task_id": task_id
+            })
+        else:
+            return jsonify({"error": "Failed to update task"}), 500
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to move calendar event: {str(e)}"}), 500
+
+@app.route('/api/calendar/create', methods=['POST'])
+def create_calendar():
+    """
+    Create a new calendar - returns JSON compatible with CreateCalendarRequest
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'calendar_name' not in data:
+            return jsonify({"error": "Please provide 'calendar_name' field in request body"}), 400
+        
+        calendar_name = data['calendar_name']
+        description = data.get('description', '')
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return jsonify({"error": "user_id parameter is required"}), 400
+        
+        # Create calendar request
+        calendar_request = {
+            "calendar_name": calendar_name,
+            "description": description
+        }
+        
+        return jsonify({
+            "calendar_request": calendar_request,
+            "message": "Calendar creation request created successfully",
+            "user_id": user_id
+        })
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to create calendar request: {str(e)}"}), 500
+
+@app.route('/api/calendar/events/find-specific', methods=['POST'])
+def find_specific_calendar_event():
+    """
+    Find a specific calendar event - returns JSON compatible with FindEventRequest
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'title' not in data or 'start_datetime' not in data:
+            return jsonify({"error": "Please provide 'title' and 'start_datetime' fields in request body"}), 400
+        
+        title = data['title']
+        start_datetime = data['start_datetime']
+        calendar_id = data.get('calendar_id', 'primary')
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return jsonify({"error": "user_id parameter is required"}), 400
+        
+        # Find task by title and start time
+        try:
+            target_datetime = datetime.fromisoformat(start_datetime)
+            tasks = db.get_tasks_by_user(user_id)
+            
+            # Find matching task
+            matching_task = None
+            for task in tasks:
+                if (task["title"].lower() == title.lower() and 
+                    task.get("scheduled_start") and
+                    abs((datetime.fromisoformat(task["scheduled_start"]) - target_datetime).total_seconds()) < 3600):  # Within 1 hour
+                    matching_task = task
+                    break
+            
+            if matching_task:
+                find_request = {
+                    "title": title,
+                    "start_datetime": start_datetime,
+                    "calendar_id": calendar_id
+                }
+                
+                return jsonify({
+                    "find_request": find_request,
+                    "task_found": True,
+                    "task": matching_task,
+                    "message": "Event found successfully"
+                })
+            else:
+                return jsonify({
+                    "find_request": {
+                        "title": title,
+                        "start_datetime": start_datetime,
+                        "calendar_id": calendar_id
+                    },
+                    "task_found": False,
+                    "message": "No matching event found"
+                })
+                
+        except ValueError:
+            return jsonify({"error": "Invalid datetime format. Use ISO format"}), 400
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to find specific calendar event: {str(e)}"}), 500
+
 # For Vercel deployment
 if __name__ == '__main__':
     # Local development
