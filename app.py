@@ -1361,6 +1361,39 @@ def test_get_tasks():
             "error_type": type(e).__name__
         })
 
+@app.route('/api/test-get-user-tasks', methods=['GET'])
+def test_get_user_tasks():
+    """
+    Test getting tasks for specific user using both methods
+    """
+    try:
+        user_id = "296f52b9-df50-4738-a3fa-17302ae2bb13"
+        print(f"🧪 Testing get user tasks for user: {user_id}")
+        
+        # Test the database method directly
+        tasks = db.get_tasks_by_user(user_id)
+        print(f"✅ Database method returned: {len(tasks)} tasks")
+        
+        # Also test with service client directly
+        service_client = db._get_service_client()
+        result = service_client.table('tasks').select('*').eq('user_id', user_id).execute()
+        print(f"✅ Service client returned: {len(result.data)} tasks")
+        
+        return jsonify({
+            "status": "success", 
+            "database_method_tasks": len(tasks),
+            "service_client_tasks": len(result.data),
+            "database_method_result": tasks,
+            "service_client_result": result.data
+        })
+    except Exception as e:
+        print(f"❌ Get user tasks test failed: {e}")
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
+
 @app.route('/api/user/stats', methods=['GET'])
 def get_user_stats():
     """
