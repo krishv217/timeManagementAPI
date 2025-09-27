@@ -905,7 +905,7 @@ def health_check():
     """
     Health check endpoint
     """
-    return jsonify({"status": "healthy", "message": "TimeAPI is running"})
+    return jsonify({"status": "healthy", "message": "TimeAPI is running", "version": "2.1"})
 
 @app.route('/api/debug/time', methods=['GET'])
 def debug_time():
