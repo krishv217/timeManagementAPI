@@ -910,6 +910,39 @@ def debug_time():
         "timestamp": current_time.timestamp()
     })
 
+@app.route('/api/debug/validate-time', methods=['POST'])
+def debug_validate_time():
+    """
+    Debug endpoint to test time validation logic
+    """
+    try:
+        data = request.get_json()
+        if not data or 'start_time' not in data:
+            return jsonify({"error": "Please provide start_time"}), 400
+        
+        current_time = datetime.now()
+        start_time = datetime.fromisoformat(data['start_time'])
+        min_start_time = current_time + timedelta(minutes=15)
+        
+        result = {
+            "current_time": current_time.isoformat(),
+            "input_start_time": start_time.isoformat(),
+            "min_start_time": min_start_time.isoformat(),
+            "is_past": start_time < current_time,
+            "needs_adjustment": start_time < min_start_time
+        }
+        
+        if start_time < min_start_time:
+            adjusted_start = min_start_time
+            duration = timedelta(hours=1)  # Default duration
+            adjusted_end = adjusted_start + duration
+            result["adjusted_start_time"] = adjusted_start.isoformat()
+            result["adjusted_end_time"] = adjusted_end.isoformat()
+        
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/', methods=['GET'])
 def home():
     """
