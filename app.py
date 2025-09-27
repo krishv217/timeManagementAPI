@@ -1333,6 +1333,34 @@ def test_create_task():
             "error_type": type(e).__name__
         })
 
+@app.route('/api/test-get-tasks', methods=['GET'])
+def test_get_tasks():
+    """
+    Test getting all tasks using service role
+    """
+    try:
+        print(f"🧪 Testing get all tasks with service role...")
+        
+        # Use service client to bypass RLS
+        service_client = db._get_service_client()
+        
+        # Get all tasks
+        result = service_client.table('tasks').select('*').execute()
+        
+        print(f"✅ Tasks retrieved successfully: {len(result.data)} tasks found")
+        return jsonify({
+            "status": "success", 
+            "message": f"Retrieved {len(result.data)} tasks",
+            "tasks": result.data
+        })
+    except Exception as e:
+        print(f"❌ Get tasks test failed: {e}")
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
+
 @app.route('/api/user/stats', methods=['GET'])
 def get_user_stats():
     """
