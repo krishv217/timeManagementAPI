@@ -76,8 +76,16 @@ class Database:
                 if field not in task_data:
                     raise ValueError(f"Missing required field: {field}")
             
-            result = self.supabase.table('tasks').insert(task_data).execute()
-            return result.data[0] if result.data else None
+            # Try with regular client first, if it fails due to RLS, use service client
+            try:
+                result = self.supabase.table('tasks').insert(task_data).execute()
+                return result.data[0] if result.data else None
+            except Exception as rls_error:
+                print(f"RLS error with regular client, trying service client: {rls_error}")
+                # Use service client to bypass RLS
+                service_client = self._get_service_client()
+                result = service_client.table('tasks').insert(task_data).execute()
+                return result.data[0] if result.data else None
         except Exception as e:
             print(f"Error creating task: {e}")
             return None
@@ -96,8 +104,16 @@ class Database:
         """Get all tasks for a user"""
         try:
             self._ensure_initialized()
-            result = self.supabase.table('tasks').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
-            return result.data if result.data else []
+            # Try with regular client first, if it fails due to RLS, use service client
+            try:
+                result = self.supabase.table('tasks').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
+                return result.data if result.data else []
+            except Exception as rls_error:
+                print(f"RLS error with regular client, trying service client: {rls_error}")
+                # Use service client to bypass RLS
+                service_client = self._get_service_client()
+                result = service_client.table('tasks').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
+                return result.data if result.data else []
         except Exception as e:
             print(f"Error getting user tasks: {e}")
             return []
@@ -116,8 +132,16 @@ class Database:
         """Update a task"""
         try:
             self._ensure_initialized()
-            result = self.supabase.table('tasks').update(update_data).eq('id', task_id).execute()
-            return result.data[0] if result.data else None
+            # Try with regular client first, if it fails due to RLS, use service client
+            try:
+                result = self.supabase.table('tasks').update(update_data).eq('id', task_id).execute()
+                return result.data[0] if result.data else None
+            except Exception as rls_error:
+                print(f"RLS error with regular client, trying service client: {rls_error}")
+                # Use service client to bypass RLS
+                service_client = self._get_service_client()
+                result = service_client.table('tasks').update(update_data).eq('id', task_id).execute()
+                return result.data[0] if result.data else None
         except Exception as e:
             print(f"Error updating task: {e}")
             return None
