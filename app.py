@@ -276,8 +276,18 @@ Minimum start time: {min_start_time.strftime('%Y-%m-%d %H:%M:%S')}
                     print(f"Error parsing scheduled task: {e}")
                     continue
             
+            # Final validation: ensure ALL tasks are in the future
+            final_scheduled_tasks = []
+            for task in scheduled_tasks:
+                if task.start_time < current_time + timedelta(minutes=15):
+                    # Force this task to be in the future
+                    task.start_time = current_time + timedelta(minutes=15)
+                    task.end_time = task.start_time + timedelta(hours=1)  # Default 1 hour
+                    print(f"🚨 FINAL VALIDATION: Forced task '{task.title}' to {task.start_time}")
+                final_scheduled_tasks.append(task)
+            
             return TaskPlanningResponse(
-                scheduled_tasks=scheduled_tasks,
+                scheduled_tasks=final_scheduled_tasks,
                 summary=schedule_data.get("summary", "Schedule generated successfully"),
                 conflicts=schedule_data.get("conflicts", []),
                 suggestions=schedule_data.get("suggestions", [])
