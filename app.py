@@ -1292,6 +1292,47 @@ def test_get_users():
             "error_type": type(e).__name__
         })
 
+@app.route('/api/test-create-task', methods=['POST'])
+def test_create_task():
+    """
+    Test creating a task for the test user using service role
+    """
+    try:
+        print(f"🧪 Testing task creation with service role...")
+        
+        # Use service client to bypass RLS
+        service_client = db._get_service_client()
+        
+        # Create test task data
+        task_data = {
+            "user_id": "296f52b9-df50-4738-a3fa-17302ae2bb13",  # Test user ID
+            "title": "Test Task - Work on Project",
+            "description": "This is a test task created for the test user",
+            "estimated_duration": 120,  # 2 hours in minutes
+            "priority": 3,
+            "category": "work",
+            "status": "pending",
+            "scheduled_start": "2025-09-28T09:00:00Z",
+            "scheduled_end": "2025-09-28T11:00:00Z"
+        }
+        
+        # Try to insert task with service client
+        result = service_client.table('tasks').insert(task_data).execute()
+        
+        print(f"✅ Task creation successful: {result.data}")
+        return jsonify({
+            "status": "success", 
+            "message": "Task created successfully",
+            "task_data": result.data[0] if result.data else None
+        })
+    except Exception as e:
+        print(f"❌ Task creation test failed: {e}")
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
+
 @app.route('/api/user/stats', methods=['GET'])
 def get_user_stats():
     """
