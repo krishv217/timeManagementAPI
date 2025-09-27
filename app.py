@@ -1062,6 +1062,17 @@ def plan_tasks_advanced():
         optimizer = ScheduleOptimizer()
         schedule_response = optimizer.generate_schedule_with_ai(user_input, user_id, target_date)
         
+        # CRITICAL: Force all tasks to be in the future before returning
+        current_time = datetime.now()
+        min_start_time = current_time + timedelta(minutes=15)
+        
+        for task in schedule_response.scheduled_tasks:
+            if task.start_time < min_start_time:
+                print(f"🚨 API ENDPOINT: Forcing task '{task.title}' from {task.start_time} to {min_start_time}")
+                task.start_time = min_start_time
+                task.end_time = task.start_time + timedelta(hours=1)  # Default 1 hour
+                min_start_time = task.end_time + timedelta(minutes=15)  # Add buffer for next task
+        
         return jsonify(schedule_response.to_dict())
         
     except Exception as e:
