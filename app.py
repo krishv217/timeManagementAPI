@@ -194,6 +194,8 @@ Minimum start time: {min_start_time.strftime('%Y-%m-%d %H:%M:%S')}
 
             print(f"🤖 Calling OpenAI API for schedule generation...")
             print(f"📝 User input received: {user_input}")
+            print(f"🕐 Current time for validation: {current_time}")
+            print(f"🕐 Minimum start time: {min_start_time}")
             response = get_openai_client().chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
@@ -220,8 +222,10 @@ Minimum start time: {min_start_time.strftime('%Y-%m-%d %H:%M:%S')}
                 }
             
             # Convert to ScheduledTask objects and validate times
+            print(f"🔍 Starting task validation for {len(schedule_data.get('scheduled_tasks', []))} tasks")
             scheduled_tasks = []
-            for task_data in schedule_data.get("scheduled_tasks", []):
+            for i, task_data in enumerate(schedule_data.get("scheduled_tasks", [])):
+                print(f"🔍 Processing task {i+1}: {task_data.get('title', 'Unknown')}")
                 try:
                     start_time = datetime.fromisoformat(task_data["start_time"])
                     end_time = datetime.fromisoformat(task_data["end_time"])
