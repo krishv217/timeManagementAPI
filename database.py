@@ -14,6 +14,7 @@ class Database:
         """Initialize Supabase client"""
         self.supabase_url = os.getenv('SUPABASE_URL', '').strip()
         self.supabase_key = os.getenv('SUPABASE_KEY', '').strip()
+        self.supabase_service_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '').strip()
         self.supabase: Client = None
         self._initialized = False
     
@@ -28,6 +29,12 @@ class Database:
             except Exception as e:
                 print(f"Error initializing Supabase client: {e}")
                 raise e
+    
+    def _get_service_client(self):
+        """Get Supabase client with service role key for admin operations"""
+        if not self.supabase_url or not self.supabase_service_key:
+            raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables are required")
+        return create_client(self.supabase_url, self.supabase_service_key)
     
     def create_user(self, user_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create a new user in the database"""

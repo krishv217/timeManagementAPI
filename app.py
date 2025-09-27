@@ -1230,13 +1230,13 @@ def test_supabase():
 @app.route('/api/test-create-user', methods=['POST'])
 def test_create_user():
     """
-    Test user creation directly
+    Test user creation directly using service role
     """
     try:
-        print(f"🧪 Testing direct user creation...")
+        print(f"🧪 Testing direct user creation with service role...")
         
-        # Ensure database is initialized
-        db._ensure_initialized()
+        # Use service client to bypass RLS
+        service_client = db._get_service_client()
         
         # Create test user data
         user_data = {
@@ -1247,8 +1247,8 @@ def test_create_user():
             "preferences": {"timezone": "UTC", "work_hours": "9-17"}
         }
         
-        # Try to insert directly
-        result = db.supabase.table('users').insert(user_data).execute()
+        # Try to insert directly with service client
+        result = service_client.table('users').insert(user_data).execute()
         
         print(f"✅ User creation successful: {result.data}")
         return jsonify({
