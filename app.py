@@ -1408,9 +1408,19 @@ def test_create_user():
             "preferences": data.get("preferences", {})
         }
         
-        # Validate required fields
-        if not user_data["google_id"] or not user_data["email"] or not user_data["name"]:
-            return jsonify({"error": "google_id, email, and name are required"}), 400
+        # Provide defaults for optional fields
+        if not user_data["google_id"]:
+            user_data["google_id"] = f"user_{int(datetime.now().timestamp())}"
+        if not user_data["email"]:
+            user_data["email"] = f"user_{int(datetime.now().timestamp())}@example.com"
+        if not user_data["name"]:
+            user_data["name"] = f"User {int(datetime.now().timestamp())}"
+        if not user_data["preferences"]:
+            user_data["preferences"] = {
+                "work_hours": {"start": "09:00", "end": "17:00"},
+                "break_duration": 15,
+                "timezone": "UTC"
+            }
         
         # Try to insert directly with service client
         result = service_client.table('users').insert(user_data).execute()
@@ -1626,17 +1636,17 @@ def create_user():
         if not data:
             return jsonify({"error": "Request body is required"}), 400
         
-        required_fields = ['google_id', 'email']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({"error": f"Missing required field: {field}"}), 400
-        
+        # Provide defaults for all fields - make everything optional
         user_data = {
-            'google_id': data['google_id'],
-            'email': data['email'],
-            'name': data.get('name', ''),
-            'calendar_id': data.get('calendar_id', ''),
-            'preferences': data.get('preferences', {})
+            'google_id': data.get('google_id', f"user_{int(datetime.now().timestamp())}"),
+            'email': data.get('email', f"user_{int(datetime.now().timestamp())}@example.com"),
+            'name': data.get('name', f"User {int(datetime.now().timestamp())}"),
+            'calendar_id': data.get('calendar_id', 'primary'),
+            'preferences': data.get('preferences', {
+                "work_hours": {"start": "09:00", "end": "17:00"},
+                "break_duration": 15,
+                "timezone": "UTC"
+            })
         }
         
         created_user = db.create_user_with_google(**user_data)
