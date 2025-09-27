@@ -1264,6 +1264,34 @@ def test_create_user():
             "error_type": type(e).__name__
         })
 
+@app.route('/api/test-get-users', methods=['GET'])
+def test_get_users():
+    """
+    Test getting all users using service role
+    """
+    try:
+        print(f"🧪 Testing get all users with service role...")
+        
+        # Use service client to bypass RLS
+        service_client = db._get_service_client()
+        
+        # Get all users
+        result = service_client.table('users').select('*').execute()
+        
+        print(f"✅ Users retrieved successfully: {len(result.data)} users found")
+        return jsonify({
+            "status": "success", 
+            "message": f"Retrieved {len(result.data)} users",
+            "users": result.data
+        })
+    except Exception as e:
+        print(f"❌ Get users test failed: {e}")
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
+
 @app.route('/api/user/stats', methods=['GET'])
 def get_user_stats():
     """
