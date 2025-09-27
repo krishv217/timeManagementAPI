@@ -22,8 +22,12 @@ class Database:
         if not self._initialized:
             if not self.supabase_url or not self.supabase_key:
                 raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables are required")
-            self.supabase = create_client(self.supabase_url, self.supabase_key)
-            self._initialized = True
+            try:
+                self.supabase = create_client(self.supabase_url, self.supabase_key)
+                self._initialized = True
+            except Exception as e:
+                print(f"Error initializing Supabase client: {e}")
+                raise e
     
     def create_user(self, user_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create a new user in the database"""
