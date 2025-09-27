@@ -877,6 +877,19 @@ def health_check():
     """
     return jsonify({"status": "healthy", "message": "TimeAPI is running"})
 
+@app.route('/api/debug/time', methods=['GET'])
+def debug_time():
+    """
+    Debug endpoint to check current time on server
+    """
+    current_time = datetime.now()
+    return jsonify({
+        "current_time": current_time.isoformat(),
+        "current_time_formatted": current_time.strftime('%Y-%m-%d %H:%M:%S'),
+        "timezone": str(current_time.tzinfo),
+        "timestamp": current_time.timestamp()
+    })
+
 @app.route('/', methods=['GET'])
 def home():
     """
