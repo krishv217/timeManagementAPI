@@ -1073,7 +1073,9 @@ def plan_tasks_advanced():
                 task.end_time = task.start_time + timedelta(hours=1)  # Default 1 hour
                 min_start_time = task.end_time + timedelta(minutes=15)  # Add buffer for next task
         
-        return jsonify(schedule_response.to_dict())
+        response_dict = schedule_response.to_dict()
+        response_dict["debug_message"] = f"API endpoint executed at {datetime.now().isoformat()}"
+        return jsonify(response_dict)
         
     except Exception as e:
         return jsonify({"error": f"Failed to plan tasks: {str(e)}"}), 500
