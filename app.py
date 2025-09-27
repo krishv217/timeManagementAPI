@@ -1389,19 +1389,28 @@ def test_create_user():
     Test user creation directly using service role
     """
     try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "Please provide user data in request body"}), 400
+        
         print(f"🧪 Testing direct user creation with service role...")
         
         # Use service client to bypass RLS
         service_client = db._get_service_client()
         
-        # Create test user data
+        # Use data from request
         user_data = {
-            "google_id": "test_user_12345",
-            "email": "testuser@example.com",
-            "name": "Test User",
-            "calendar_id": "test_calendar_123",
-            "preferences": {"timezone": "UTC", "work_hours": "9-17"}
+            "google_id": data.get("google_id"),
+            "email": data.get("email"),
+            "name": data.get("name"),
+            "calendar_id": data.get("calendar_id", "primary"),
+            "preferences": data.get("preferences", {})
         }
+        
+        # Validate required fields
+        if not user_data["google_id"] or not user_data["email"] or not user_data["name"]:
+            return jsonify({"error": "google_id, email, and name are required"}), 400
         
         # Try to insert directly with service client
         result = service_client.table('users').insert(user_data).execute()
