@@ -1408,18 +1408,20 @@ def test_create_user():
             "preferences": data.get("preferences", {})
         }
         
-        # Provide defaults for optional fields
+        # Provide dummy data for optional fields
+        timestamp = int(datetime.now().timestamp())
         if not user_data["google_id"]:
-            user_data["google_id"] = f"user_{int(datetime.now().timestamp())}"
+            user_data["google_id"] = f"dummy_user_{timestamp}"
         if not user_data["email"]:
-            user_data["email"] = f"user_{int(datetime.now().timestamp())}@example.com"
+            user_data["email"] = f"dummy.user.{timestamp}@example.com"
         if not user_data["name"]:
-            user_data["name"] = f"User {int(datetime.now().timestamp())}"
+            user_data["name"] = f"Dummy User {timestamp}"
         if not user_data["preferences"]:
             user_data["preferences"] = {
                 "work_hours": {"start": "09:00", "end": "17:00"},
                 "break_duration": 15,
-                "timezone": "UTC"
+                "timezone": "UTC",
+                "dummy_data": True
             }
         
         # Try to insert directly with service client
@@ -1636,16 +1638,18 @@ def create_user():
         if not data:
             return jsonify({"error": "Request body is required"}), 400
         
-        # Provide defaults for all fields - make everything optional
+        # Provide dummy data for all fields - make everything optional
+        timestamp = int(datetime.now().timestamp())
         user_data = {
-            'google_id': data.get('google_id', f"user_{int(datetime.now().timestamp())}"),
-            'email': data.get('email', f"user_{int(datetime.now().timestamp())}@example.com"),
-            'name': data.get('name', f"User {int(datetime.now().timestamp())}"),
+            'google_id': data.get('google_id', f"dummy_user_{timestamp}"),
+            'email': data.get('email', f"dummy.user.{timestamp}@example.com"),
+            'name': data.get('name', f"Dummy User {timestamp}"),
             'calendar_id': data.get('calendar_id', 'primary'),
             'preferences': data.get('preferences', {
                 "work_hours": {"start": "09:00", "end": "17:00"},
                 "break_duration": 15,
-                "timezone": "UTC"
+                "timezone": "UTC",
+                "dummy_data": True
             })
         }
         
