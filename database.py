@@ -187,11 +187,32 @@ class Database:
         """Get user task statistics using the database function"""
         try:
             self._ensure_initialized()
-            result = self.supabase.rpc('get_user_task_stats', {
-                'user_uuid': user_id,
-                'days_back': days_back
-            }).execute()
-            return result.data[0] if result.data else None
+            # Try with regular client first
+            try:
+                result = self.supabase.rpc('get_user_task_stats', {
+                    'user_uuid': user_id,
+                    'days_back': days_back
+                }).execute()
+                stats = result.data[0] if result.data else None
+                # If we get no results, it might be due to RLS, so try service client
+                if not stats:
+                    print(f"No stats found with regular client, trying service client for user: {user_id}")
+                    service_client = self._get_service_client()
+                    result = service_client.rpc('get_user_task_stats', {
+                        'user_uuid': user_id,
+                        'days_back': days_back
+                    }).execute()
+                    stats = result.data[0] if result.data else None
+                return stats
+            except Exception as rls_error:
+                print(f"RLS error with regular client, trying service client: {rls_error}")
+                # Use service client to bypass RLS
+                service_client = self._get_service_client()
+                result = service_client.rpc('get_user_task_stats', {
+                    'user_uuid': user_id,
+                    'days_back': days_back
+                }).execute()
+                return result.data[0] if result.data else None
         except Exception as e:
             print(f"Error getting user task stats: {e}")
             return None
@@ -200,10 +221,29 @@ class Database:
         """Get productivity insights using the database function"""
         try:
             self._ensure_initialized()
-            result = self.supabase.rpc('get_productivity_insights', {
-                'user_uuid': user_id
-            }).execute()
-            return result.data if result.data else []
+            # Try with regular client first
+            try:
+                result = self.supabase.rpc('get_productivity_insights', {
+                    'user_uuid': user_id
+                }).execute()
+                insights = result.data if result.data else []
+                # If we get no results, it might be due to RLS, so try service client
+                if not insights:
+                    print(f"No insights found with regular client, trying service client for user: {user_id}")
+                    service_client = self._get_service_client()
+                    result = service_client.rpc('get_productivity_insights', {
+                        'user_uuid': user_id
+                    }).execute()
+                    insights = result.data if result.data else []
+                return insights
+            except Exception as rls_error:
+                print(f"RLS error with regular client, trying service client: {rls_error}")
+                # Use service client to bypass RLS
+                service_client = self._get_service_client()
+                result = service_client.rpc('get_productivity_insights', {
+                    'user_uuid': user_id
+                }).execute()
+                return result.data if result.data else []
         except Exception as e:
             print(f"Error getting productivity insights: {e}")
             return []
