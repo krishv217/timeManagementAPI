@@ -1202,6 +1202,9 @@ def test_supabase():
     try:
         print(f"🧪 Testing Supabase database connection...")
         
+        # Ensure database is initialized
+        db._ensure_initialized()
+        
         # Test basic connection by trying to query the users table
         result = db.supabase.table('users').select('count').execute()
         
@@ -1211,7 +1214,8 @@ def test_supabase():
             "message": "Supabase connection working",
             "database_url": os.getenv('SUPABASE_URL', 'Not set'),
             "has_anon_key": bool(os.getenv('SUPABASE_KEY')),
-            "has_service_key": bool(os.getenv('SUPABASE_SERVICE_ROLE_KEY'))
+            "has_service_key": bool(os.getenv('SUPABASE_SERVICE_ROLE_KEY')),
+            "table_count": len(result.data) if result.data else 0
         })
     except Exception as e:
         print(f"❌ Supabase test failed: {e}")
