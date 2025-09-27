@@ -1227,6 +1227,43 @@ def test_supabase():
             "has_service_key": bool(os.getenv('SUPABASE_SERVICE_ROLE_KEY'))
         })
 
+@app.route('/api/test-create-user', methods=['POST'])
+def test_create_user():
+    """
+    Test user creation directly
+    """
+    try:
+        print(f"🧪 Testing direct user creation...")
+        
+        # Ensure database is initialized
+        db._ensure_initialized()
+        
+        # Create test user data
+        user_data = {
+            "google_id": "test_user_12345",
+            "email": "testuser@example.com",
+            "name": "Test User",
+            "calendar_id": "test_calendar_123",
+            "preferences": {"timezone": "UTC", "work_hours": "9-17"}
+        }
+        
+        # Try to insert directly
+        result = db.supabase.table('users').insert(user_data).execute()
+        
+        print(f"✅ User creation successful: {result.data}")
+        return jsonify({
+            "status": "success", 
+            "message": "User created successfully",
+            "user_data": result.data[0] if result.data else None
+        })
+    except Exception as e:
+        print(f"❌ User creation test failed: {e}")
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
+
 @app.route('/api/user/stats', methods=['GET'])
 def get_user_stats():
     """
