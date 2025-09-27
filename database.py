@@ -12,8 +12,8 @@ load_dotenv()
 class Database:
     def __init__(self):
         """Initialize Supabase client"""
-        self.supabase_url = os.getenv('SUPABASE_URL')
-        self.supabase_key = os.getenv('SUPABASE_KEY')
+        self.supabase_url = os.getenv('SUPABASE_URL', '').strip()
+        self.supabase_key = os.getenv('SUPABASE_KEY', '').strip()
         self.supabase: Client = None
         self._initialized = False
     
