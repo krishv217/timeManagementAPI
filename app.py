@@ -1194,6 +1194,35 @@ def test_openai():
         print(f"❌ OpenAI test failed: {e}")
         return jsonify({"status": "error", "error": str(e)})
 
+@app.route('/api/test-supabase', methods=['GET'])
+def test_supabase():
+    """
+    Test Supabase database connection
+    """
+    try:
+        print(f"🧪 Testing Supabase database connection...")
+        
+        # Test basic connection by trying to query the users table
+        result = db.supabase.table('users').select('count').execute()
+        
+        print(f"✅ Supabase connection successful")
+        return jsonify({
+            "status": "success", 
+            "message": "Supabase connection working",
+            "database_url": os.getenv('SUPABASE_URL', 'Not set'),
+            "has_anon_key": bool(os.getenv('SUPABASE_KEY')),
+            "has_service_key": bool(os.getenv('SUPABASE_SERVICE_ROLE_KEY'))
+        })
+    except Exception as e:
+        print(f"❌ Supabase test failed: {e}")
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "database_url": os.getenv('SUPABASE_URL', 'Not set'),
+            "has_anon_key": bool(os.getenv('SUPABASE_KEY')),
+            "has_service_key": bool(os.getenv('SUPABASE_SERVICE_ROLE_KEY'))
+        })
+
 @app.route('/api/user/stats', methods=['GET'])
 def get_user_stats():
     """
