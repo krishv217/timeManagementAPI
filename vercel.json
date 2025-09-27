@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "name": "promptly",
   "builds": [
     {
       "src": "app.py",
@@ -11,5 +12,8 @@
       "src": "/(.*)",
       "dest": "app.py"
     }
-  ]
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
 }

@@ -120,9 +120,22 @@ class ScheduleOptimizer:
             patterns = self.analyze_user_patterns(user_id)
             existing_events = self.get_existing_calendar_events(user_id, date)
             
+            # Get current time and ensure we're scheduling for the future
+            current_time = datetime.now()
+            if date:
+                # If date is provided, use it but ensure it's not in the past
+                if date.date() < current_time.date():
+                    date = current_time
+                elif date.date() == current_time.date() and date.time() < current_time.time():
+                    date = current_time
+            else:
+                date = current_time
+            
             system_prompt = f"""
 You are an intelligent scheduling assistant. Given a user's natural language request 
 and their existing calendar, create an optimized daily schedule.
+
+IMPORTANT: Current time is {current_time.strftime('%Y-%m-%d %H:%M:%S')} - DO NOT schedule any tasks for times in the past!
 
 User Preferences:
 - Work hours: {preferences.get('work_hours', {})}
@@ -144,6 +157,8 @@ Consider:
 - Buffer time between tasks
 - Existing calendar commitments
 - Avoid scheduling conflicts
+- Do not miss any tasks
+- CRITICAL: Only schedule tasks for times AFTER {current_time.strftime('%Y-%m-%d %H:%M:%S')}
 
 Respond with a JSON object containing:
 {{
@@ -164,7 +179,8 @@ Respond with a JSON object containing:
 }}
 
 User request: "{user_input}"
-Date: {date.strftime('%Y-%m-%d') if date else datetime.now().strftime('%Y-%m-%d')}
+Date: {date.strftime('%Y-%m-%d')}
+Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}
 """
 
             print(f"🤖 Calling OpenAI API for schedule generation...")
@@ -194,15 +210,32 @@ Date: {date.strftime('%Y-%m-%d') if date else datetime.now().strftime('%Y-%m-%d'
                     "suggestions": ["Please try rephrasing your request"]
                 }
             
-            # Convert to ScheduledTask objects
+            # Convert to ScheduledTask objects and validate times
             scheduled_tasks = []
             for task_data in schedule_data.get("scheduled_tasks", []):
                 try:
+                    start_time = datetime.fromisoformat(task_data["start_time"])
+                    end_time = datetime.fromisoformat(task_data["end_time"])
+                    
+                    # Validate and adjust times to ensure they're in the future
+                    if start_time <= current_time:
+                        # If start time is in the past, adjust it to current time + 15 minutes
+                        start_time = current_time + timedelta(minutes=15)
+                        # Adjust end time accordingly
+                        duration = end_time - datetime.fromisoformat(task_data["start_time"])
+                        end_time = start_time + duration
+                        print(f"⚠️ Adjusted past time for task '{task_data['title']}' to {start_time}")
+                    
+                    if end_time <= start_time:
+                        # Ensure end time is after start time
+                        end_time = start_time + timedelta(minutes=60)  # Default 1 hour duration
+                        print(f"⚠️ Adjusted end time for task '{task_data['title']}' to {end_time}")
+                    
                     scheduled_task = ScheduledTask(
                         title=task_data["title"],
                         description=task_data.get("description", ""),
-                        start_time=datetime.fromisoformat(task_data["start_time"]),
-                        end_time=datetime.fromisoformat(task_data["end_time"]),
+                        start_time=start_time,
+                        end_time=end_time,
                         priority=TaskPriority(task_data.get("priority", 3)),
                         category=TaskCategory(task_data.get("category", "general")),
                         reasoning=task_data.get("reasoning", "")
@@ -265,48 +298,43 @@ def extract_tasks_from_text(text):
     Use OpenAI to extract tasks from the input text
     """
     prompt = f"""
-    Analyze the following text and extract all DISTINCT tasks/activities mentioned. 
-    For each task, estimate how long it might take in hours (be realistic and reasonable).
+    Extract ALL tasks/activities from this text. Count each distinct activity mentioned.
     
-    IMPORTANT: 
-    - Extract only UNIQUE tasks (no duplicates)
-    - Each task should be distinct and non-overlapping
-    - Use clear, specific task names
-    - If a specific time is mentioned for a task, ALWAYS include the time in the task name (e.g., "Meeting at 2pm", "Gym at 3:30pm")
-    - If a time range is mentioned, include the full range (e.g., "Meeting 2pm to 4pm", "Gym 3:30pm-5:30pm")
-    - Consider realistic timing for activities (meals, sleep, etc.)
+    CRITICAL: You MUST extract EVERY task mentioned. Do not miss any.
     
-    Guidelines for duration estimation:
-    - Sleep/nap: 0.5 hours
+    For each task:
+    1. Use the exact activity name or a clear, specific description
+    2. Estimate realistic duration in hours
+    3. If time is mentioned, include it in the task name
+    
+    Duration guidelines:
     - Exercise/gym: 1-1.5 hours
+    - Study/learning: 1-3 hours  
+    - Cleaning: 0.5-2 hours
     - Work projects: 2-4 hours
     - Meetings: 0.5-2 hours
     - Shopping: 1-2 hours
     - Cooking: 0.5-1.5 hours
-    - Study: 1-3 hours
-    - Phone calls: 0.25-0.5 hours
-    - Reading: 0.5-2 hours
-    - Cleaning: 0.5-2 hours
     
     Text: "{text}"
     
-    Return ONLY a JSON array of objects with this exact format:
+    Return ONLY a JSON array with this exact format:
     [
-        {{"name": "task name", "duration_hours": 2.5}},
-        {{"name": "another task", "duration_hours": 1.0}}
+        {{"name": "task name", "duration_hours": 1.5}},
+        {{"name": "another task", "duration_hours": 2.0}}
     ]
     
-    Do not include any other text, just the JSON array.
+    Extract ALL tasks mentioned. Do not skip any.
     """
     
     try:
         response = get_openai_client().chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a task extraction assistant. Extract tasks and estimate durations from text."},
+                {"role": "system", "content": "You are a task extraction assistant. Your job is to extract EVERY task mentioned in the text. Do not miss any tasks. Count each distinct activity and return all of them."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=500,
+            max_tokens=800,
             temperature=0.3
         )
         
@@ -469,36 +497,47 @@ def get_optimal_time_for_task(task_name, current_time):
     explicit_time = extract_explicit_time(task_name)
     if explicit_time:
         hour, minute = explicit_time
-        return current_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        optimal_time = current_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        # If explicit time is in the past, return current time + 15 minutes
+        if optimal_time < current_time:
+            return current_time + timedelta(minutes=15)
+        return optimal_time
     
     # Fall back to logical optimal times
     task_lower = task_name.lower()
     
     # Meal times
     if any(word in task_lower for word in ['breakfast', 'morning meal']):
-        return current_time.replace(hour=8, minute=0, second=0, microsecond=0)
+        optimal_time = current_time.replace(hour=8, minute=0, second=0, microsecond=0)
     elif any(word in task_lower for word in ['lunch', 'lunchtime']):
-        return current_time.replace(hour=12, minute=0, second=0, microsecond=0)
+        optimal_time = current_time.replace(hour=12, minute=0, second=0, microsecond=0)
     elif any(word in task_lower for word in ['dinner', 'evening meal', 'supper']):
-        return current_time.replace(hour=18, minute=0, second=0, microsecond=0)
+        optimal_time = current_time.replace(hour=18, minute=0, second=0, microsecond=0)
     
     # Sleep times
     elif any(word in task_lower for word in ['sleep', 'nap', 'rest']):
         if 'nap' in task_lower:
-            return current_time.replace(hour=14, minute=0, second=0, microsecond=0)  # 2 PM nap
+            optimal_time = current_time.replace(hour=14, minute=0, second=0, microsecond=0)  # 2 PM nap
         else:
-            return current_time.replace(hour=22, minute=0, second=0, microsecond=0)  # 10 PM sleep
+            optimal_time = current_time.replace(hour=22, minute=0, second=0, microsecond=0)  # 10 PM sleep
     
     # Exercise times
     elif any(word in task_lower for word in ['gym', 'exercise', 'workout', 'run', 'jog']):
-        return current_time.replace(hour=17, minute=0, second=0, microsecond=0)  # 5 PM exercise
+        optimal_time = current_time.replace(hour=17, minute=0, second=0, microsecond=0)  # 5 PM exercise
     
     # Work/study times
     elif any(word in task_lower for word in ['work', 'study', 'project', 'meeting', 'presentation']):
-        return current_time.replace(hour=9, minute=0, second=0, microsecond=0)  # 9 AM work
+        optimal_time = current_time.replace(hour=9, minute=0, second=0, microsecond=0)  # 9 AM work
     
-    # Default to current time
-    return current_time
+    else:
+        # Default to current time + 15 minutes
+        optimal_time = current_time + timedelta(minutes=15)
+    
+    # Ensure the optimal time is not in the past
+    if optimal_time < current_time:
+        return current_time + timedelta(minutes=15)
+    
+    return optimal_time
 
 
 def has_time_conflict(new_start, new_end, existing_times):
@@ -611,11 +650,20 @@ def schedule_tasks(tasks, start_date=None, existing_tasks=None):
     if not tasks:
         return []
     
-    # Default to today if no start date provided
+    # Get current time to ensure we don't schedule in the past
+    current_time = datetime.now()
+    
+    # Default to today if no start date provided, but ensure it's not in the past
     if start_date is None:
-        start_date = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+        start_date = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
+        # If it's already past 9 AM, start from current time + 15 minutes
+        if start_date < current_time:
+            start_date = current_time + timedelta(minutes=15)
     else:
         start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        # Ensure start_date is not in the past
+        if start_date < current_time:
+            start_date = current_time + timedelta(minutes=15)
     
     # Get existing task times to avoid conflicts
     existing_times = []
@@ -668,14 +716,22 @@ def schedule_tasks(tasks, start_date=None, existing_tasks=None):
         # Check if this task has explicit times
         explicit_start, explicit_end = extract_explicit_times(task_name)
         if explicit_start:
-            # Use explicit start time regardless of current time or optimal time
+            # Use explicit start time, but ensure it's not in the past
             hour, minute = explicit_start
             task_start = start_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            
+            # If explicit time is in the past, adjust it to current time + 15 minutes
+            if task_start < current_time:
+                task_start = current_time + timedelta(minutes=15)
+                print(f"⚠️ Adjusted past explicit time for task '{task_name}' to {task_start}")
             
             # If explicit end time is provided, calculate duration from it
             if explicit_end:
                 end_hour, end_minute = explicit_end
                 task_end_time = start_date.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+                # Ensure end time is not in the past
+                if task_end_time < current_time:
+                    task_end_time = task_start + timedelta(hours=1)  # Default 1 hour duration
                 duration = task_end_time - task_start
                 duration_hours = duration.total_seconds() / 3600
                 duration = timedelta(hours=duration_hours)
